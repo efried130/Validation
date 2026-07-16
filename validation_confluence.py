@@ -121,7 +121,7 @@ class ValidationConfluence:
     NUM_ALGOS = len(FLPE_MOI_ALGOS)  # flpe/moi: metroman, busboi, hivdi, momma, sad, sic4dvar, consensus
     NUM_ALGOS_OFFLINE = 16
 
-    def __init__(self, reach_data, run_type, gage_dir, svs_file=None, exclude_json=None):
+    def __init__(self, reach_data, run_type, gage_dir, svs_file, exclude_json, svs_reach_id_col):
         """
         Parameters
         ----------
@@ -150,7 +150,7 @@ class ValidationConfluence:
         self.reach_id = reach_data["reach_id"]
         print('Processing', self.reach_id)
         if svs_file is not None:
-            self.gage_data = self.read_gage_data_svs(svs_file, exclude_json)
+            self.gage_data = self.read_gage_data_svs(svs_file, exclude_json, svs_reach_id_col)
         else:
             self.gage_data = self.read_gage_data(gage_dir / reach_data["sos"])
 
@@ -242,7 +242,7 @@ class ValidationConfluence:
 
         return gage_data
 
-    def read_gage_data_svs(self, svs_file, exclude_json=None):
+    def read_gage_data_svs(self, svs_file, exclude_json, svs_reach_id_col):
         """Read gage data from SVS NetCDF file and return gage data dictionary.
         
         Same output format as read_gage_data: a dictionary with keys
@@ -263,7 +263,7 @@ class ValidationConfluence:
         """
         
         svs = Dataset(svs_file, 'r')
-        gage_data = self.get_gage_q_svs(svs, exclude_json)
+        gage_data = self.get_gage_q_svs(svs, exclude_json, svs_reach_id_col)
         svs.close()
         
         if gage_data:
@@ -273,7 +273,7 @@ class ValidationConfluence:
         
         return gage_data
 
-    def get_gage_q_svs(self, svs, exclude_json=None):
+    def get_gage_q_svs(self, svs, exclude_json, svs_reach_id_col):
         """Return discharge and discharge time from SVS NetCDF dataset.
         
         Matches self.reach_id against reach_id_v17, excludes training IDs,
@@ -311,7 +311,7 @@ class ValidationConfluence:
             return {}
         
         # Read reach IDs - shape is (station, num_rchs)
-        svs_reaches = svs['reach_id_v17'][:]
+        svs_reaches = svs[svs_reach_id_col][:]
         
         if svs_reaches.ndim == 2:
             # Search across all num_rchs columns for a match
@@ -484,11 +484,18 @@ class ValidationConfluence:
             flpe_file = flpe_file_map[algo]
             try:
                 flpe_ds = Dataset(flpe_file, 'r')
-            except Exception:
+            except Exception as e:
+                print(f"Could not read flpe file: {flpe_file}.\n{e}")
                 flpe_data[algo] = -9999
                 continue
 
-            flpe_data[algo] = flpe_ds[convention_dict[algo]][:].filled(np.nan)
+            try:
+                flpe_data[algo] = flpe_ds[convention_dict[algo]][:].filled(np.nan)
+            except Exception as e:
+                print(f"Could not read discharge variable ({convention_dict[algo]}) from dataset: {flpe_file}.\n{e}")
+                flpe_data[algo] = -9999
+                continue
+
             conlen = len(flpe_data[algo])
             flpe_ds.close()
 
@@ -1001,6 +1008,11 @@ def create_args():
                             type=existing_file,
                             help='Path to the file of gauges to not use for validation.'
                             )
+    arg_parser.add_argument('--svs_reach_id_col',
+                            type=str,
+                            help='name of reach_id column to be used in the SVS file.',
+                            default='reach_id_v17b',
+                            )
     arg_parser.add_argument('-s',
                             '--sosbucket',
                             type=str,
@@ -1043,7 +1055,8 @@ def run_validation():
         run_type, 
         gage_dir, 
         svs_file=args.svs_file, 
-        exclude_json=args.exclude_gauges_file
+        exclude_json=args.exclude_gauges_file,
+        svs_reach_id_col=args.svs_reach_id_col,
     )
     vc.validate()
 
